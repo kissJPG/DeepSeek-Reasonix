@@ -780,7 +780,7 @@ const PROXY_MODES = ["auto", "custom", "off"] as const;
 // The settings UI uses it for subagent defaults; provider-specific levels are
 // inferred by the backend or edited in TOML for rare gateways.
 export const EFFORT_PRESETS: readonly string[] = ["low", "medium", "high", "xhigh", "max"];
-const REASONING_PROTOCOLS: readonly string[] = ["", "deepseek", "openai", "none"];
+const REASONING_PROTOCOLS: readonly string[] = ["", "deepseek", "glm", "openai", "none"];
 const THINKING_MODES: readonly string[] = ["", "enabled", "disabled", "adaptive"];
 const PROXY_TYPES = ["http", "https", "socks5", "socks5h"] as const;
 const LANGUAGE_PREFS: LangPref[] = ["", "zh", "en"];
@@ -1481,6 +1481,8 @@ function reasoningProtocolLabel(protocol: string, t: ReturnType<typeof useT>): s
   switch (protocol) {
     case "deepseek":
       return t("settings.reasoningProtocol.deepseek");
+    case "glm":
+      return t("settings.reasoningProtocol.glm");
     case "openai":
       return t("settings.reasoningProtocol.openai");
     case "none":
@@ -4907,6 +4909,8 @@ function providerPresetDescription(preset: ProviderPresetView, t: ReturnType<typ
       return t("settings.addProvider.preset.longcatOpenAIDesc");
     case "longcat-anthropic":
       return t("settings.addProvider.preset.longcatAnthropicDesc");
+    case "token-rhythm":
+      return t("settings.addProvider.preset.tokenRhythmDesc");
     case "kimi-cn":
       return t("settings.addProvider.preset.kimiCnDesc");
     case "kimi-global":
@@ -4990,6 +4994,11 @@ function providerPresetDescription(preset: ProviderPresetView, t: ReturnType<typ
   }
 }
 
+function providerPresetLabel(preset: ProviderPresetView, t: ReturnType<typeof useT>): string {
+  if (preset.id === "token-rhythm") return t("settings.addProvider.preset.tokenRhythmLabel");
+  return preset.label;
+}
+
 function AddProviderPanel({
   mode,
   kinds,
@@ -5031,7 +5040,7 @@ function AddProviderPanel({
       id: `preset:${preset.id}`,
       source: "preset" as const,
       presetID: preset.id,
-      label: preset.label,
+      label: providerPresetLabel(preset, t),
       description: providerPresetDescription(preset, t),
       keyEnv: preset.keyEnv,
       added: preset.added,
@@ -5736,7 +5745,7 @@ export const ProviderEditorModelPicker = memo(function ProviderEditorModelPicker
   );
 });
 
-function ProviderEditor({
+export function ProviderEditor({
   initial,
   kinds,
   busy,
@@ -5807,6 +5816,18 @@ function ProviderEditor({
   const effectiveExtraBody = extraBodyParse.value;
   const extraBodyInvalid = Boolean(extraBodyDraft.trim() && extraBodyParse.error);
   const previewChatUrl = providerChatURLPreview(baseUrl, chatUrl, fullChatUrl);
+  const modelNames = useMemo(
+    () => parseProviderListInput(models),
+    [models],
+  );
+  const modelCandidateNames = useMemo(
+    () => uniqueStrings([...modelCandidates, ...modelNames]),
+    [modelCandidates, modelNames],
+  );
+  const visionModelNames = useMemo(
+    () => parseProviderListInput(visionModels).filter((model) => modelNames.includes(model)),
+    [modelNames, visionModels],
+  );
 
   // Empty supportedEfforts means "use protocol defaults". The simplified
   // provider flow no longer edits these levels directly, but it preserves
@@ -5953,18 +5974,6 @@ function ProviderEditor({
     );
   }
 
-  const modelNames = useMemo(
-    () => parseProviderListInput(models),
-    [models],
-  );
-  const modelCandidateNames = useMemo(
-    () => uniqueStrings([...modelCandidates, ...modelNames]),
-    [modelCandidates, modelNames],
-  );
-  const visionModelNames = useMemo(
-    () => parseProviderListInput(visionModels).filter((model) => modelNames.includes(model)),
-    [modelNames, visionModels],
-  );
   const canFetch = Boolean(name.trim() && effectiveBaseUrl);
 
   const setModelsFromList = (nextModels: string[]) => {
