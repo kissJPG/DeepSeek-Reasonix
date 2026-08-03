@@ -289,10 +289,11 @@ func configEditLockRegistryDir() (string, error) {
 	}
 	digest := sha256.Sum256([]byte(identity))
 	if runtime.GOOS != "windows" {
-		// The OS-wide temporary root is invariant across process-specific TMPDIR
-		// overrides. The per-user directory is verified and forced to mode 0700
-		// before the advisory lock file is opened.
-		return filepath.Join(string(filepath.Separator), "tmp", fmt.Sprintf("reasonix-config-locks-%x", digest[:8])), nil
+		// Use os.TempDir() so platforms where /tmp is not writable by the app
+		// user (e.g. Android/Termux) fall back to $TMPDIR. The per-user
+		// directory is verified and forced to mode 0700 before the advisory
+		// lock file is opened.
+		return filepath.Join(os.TempDir(), fmt.Sprintf("reasonix-config-locks-%x", digest[:8])), nil
 	}
 	home := strings.TrimSpace(current.HomeDir)
 	if home == "" {
