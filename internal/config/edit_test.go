@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -133,6 +134,9 @@ func TestDesktopPreferencesAreSeparateFromCLI(t *testing.T) {
 	if err := c.SetDesktopAppearance("dark", "graphite"); err != nil {
 		t.Fatalf("SetDesktopAppearance: %v", err)
 	}
+	if err := c.SetDesktopTerminalTheme("light"); err != nil {
+		t.Fatalf("SetDesktopTerminalTheme: %v", err)
+	}
 	if err := c.SetDesktopLayoutStyle("workbench"); err != nil {
 		t.Fatalf("SetDesktopLayoutStyle: %v", err)
 	}
@@ -161,6 +165,9 @@ func TestDesktopPreferencesAreSeparateFromCLI(t *testing.T) {
 	if got := c.DesktopThemeStyle(); got != "graphite" {
 		t.Fatalf("desktop theme style = %q, want graphite", got)
 	}
+	if got := c.DesktopTerminalTheme(); got != "light" {
+		t.Fatalf("desktop terminal theme = %q, want light", got)
+	}
 	if got := c.DesktopLayoutStyle(); got != "workbench" {
 		t.Fatalf("desktop layout style = %q, want workbench", got)
 	}
@@ -169,6 +176,21 @@ func TestDesktopPreferencesAreSeparateFromCLI(t *testing.T) {
 	}
 	if got, want := c.DesktopStatusBarItems(), []string{"model", "balance", "cache"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("desktop status bar items = %v, want %v", got, want)
+	}
+}
+
+func TestSetDesktopTerminalThemeValidatesPreference(t *testing.T) {
+	c := Default()
+	for _, theme := range []string{"auto", "dark", "light"} {
+		if err := c.SetDesktopTerminalTheme(theme); err != nil {
+			t.Fatalf("SetDesktopTerminalTheme(%q): %v", theme, err)
+		}
+		if got := c.DesktopTerminalTheme(); got != theme {
+			t.Fatalf("DesktopTerminalTheme() = %q, want %q", got, theme)
+		}
+	}
+	if err := c.SetDesktopTerminalTheme("sepia"); err == nil {
+		t.Fatal("SetDesktopTerminalTheme(sepia) succeeded, want validation error")
 	}
 }
 
@@ -582,6 +604,38 @@ func TestSetReasoningLanguage(t *testing.T) {
 	}
 	if err := c.SetReasoningLanguage("klingon"); err == nil {
 		t.Fatal("SetReasoningLanguage should reject unknown values")
+	}
+}
+
+func TestSetCompactRatio(t *testing.T) {
+	c := Default()
+	for _, ratio := range []float64{0.65, 0.7, 0.8, 0.85} {
+		if err := c.SetCompactRatio(ratio); err != nil {
+			t.Fatalf("SetCompactRatio(%v): %v", ratio, err)
+		}
+		if c.Agent.CompactRatio != ratio {
+			t.Fatalf("compact ratio = %v, want %v", c.Agent.CompactRatio, ratio)
+		}
+	}
+
+	previous := c.Agent.CompactRatio
+	for _, ratio := range []float64{0.64, 0.86, math.NaN(), math.Inf(1), math.Inf(-1)} {
+		if err := c.SetCompactRatio(ratio); err == nil {
+			t.Fatalf("SetCompactRatio(%v) should fail", ratio)
+		}
+		if c.Agent.CompactRatio != previous {
+			t.Fatalf("rejected ratio %v changed compact ratio to %v", ratio, c.Agent.CompactRatio)
+		}
+	}
+
+	c.Agent.ToolResultSnipRatio = 0.75
+	if err := c.SetCompactRatio(0.7); err == nil {
+		t.Fatal("SetCompactRatio should reject a value at or below the configured snip ratio")
+	}
+	c.Agent.ToolResultSnipRatio = 0.6
+	c.Agent.CompactForceRatio = 0.8
+	if err := c.SetCompactRatio(0.8); err == nil {
+		t.Fatal("SetCompactRatio should reject a value at or above the configured force ratio")
 	}
 }
 

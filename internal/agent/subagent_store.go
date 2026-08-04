@@ -454,7 +454,6 @@ func (s *SubagentStore) sessionAncestors(current string) ([]string, error) {
 	if current == "" {
 		return nil, nil
 	}
-	sessionDir := filepath.Dir(s.dir)
 	var ancestors []string
 	seen := map[string]bool{}
 	for cursor := current; cursor != ""; {
@@ -462,7 +461,15 @@ func (s *SubagentStore) sessionAncestors(current string) ([]string, error) {
 			return nil, fmt.Errorf("cycle at session %q", cursor)
 		}
 		seen[cursor] = true
-		meta, ok, err := LoadBranchMeta(filepath.Join(sessionDir, cursor+".jsonl"))
+		// Route through parentSessionPath so both the caller-provided id and
+		// every parent id read from disk metadata get the same bare-filename
+		// validation — a raw Join would let "../"-shaped ids escape the
+		// session directory.
+		metaPath, valid := s.parentSessionPath(cursor)
+		if !valid {
+			return nil, fmt.Errorf("invalid session identifier %q", cursor)
+		}
+		meta, ok, err := LoadBranchMeta(metaPath)
 		if err != nil {
 			return nil, err
 		}
@@ -592,6 +599,9 @@ func (s *SubagentStore) SaveCompleted(run *SubagentRun) error {
 	if s.parentDestroyed(run) {
 		return nil
 	}
+	if err := s.ensureBranchCreatedAt(run); err != nil {
+		return err
+	}
 	if err := run.Session.Save(s.sessionPath(run.Ref)); err != nil {
 		return err
 	}
@@ -609,6 +619,9 @@ func (s *SubagentStore) SaveFailed(run *SubagentRun) error {
 	if s.parentDestroyed(run) {
 		return nil
 	}
+	// Terminal status is independent from transcript persistence. Keep going so
+	// a sidecar failure cannot leave a failed run marked as running on disk.
+	branchErr := s.ensureBranchCreatedAt(run)
 	var sessionErr error
 	if run.Session != nil {
 		sessionErr = run.Session.Save(s.sessionPath(run.Ref))
@@ -617,7 +630,31 @@ func (s *SubagentStore) SaveFailed(run *SubagentRun) error {
 	meta.Status = SubagentFailed
 	meta.UpdatedAt = time.Now().UTC()
 	run.Meta = meta
-	return errors.Join(sessionErr, s.saveMeta(meta))
+	return errors.Join(branchErr, sessionErr, s.saveMeta(meta))
+}
+
+// ensureBranchCreatedAt seeds the session list sidecar before the first
+// transcript save. Subagent transcripts are written only on completion, so
+// Session.Save would otherwise backfill BranchMeta.CreatedAt with the save
+// moment (completion time). The real start time already lives on run.Meta.
+func (s *SubagentStore) ensureBranchCreatedAt(run *SubagentRun) error {
+	if s == nil || run == nil || run.Ref == "" {
+		return nil
+	}
+	path := s.sessionPath(run.Ref)
+	if _, ok, err := LoadBranchMeta(path); err != nil {
+		return err
+	} else if ok {
+		return nil
+	}
+	created := run.Meta.CreatedAt.UTC()
+	if created.IsZero() {
+		created = time.Now().UTC()
+	}
+	return SaveBranchMetaPreserveUpdated(path, BranchMeta{
+		ID:        BranchID(path),
+		CreatedAt: created,
+	})
 }
 
 func (s *SubagentStore) LoadMeta(ref string) (SubagentMeta, error) {
@@ -729,14 +766,21 @@ func (s *SubagentStore) isAncestorSession(ancestor, current string) (bool, error
 	if ancestor == "" || current == "" {
 		return false, nil
 	}
-	sessionDir := filepath.Dir(s.dir)
 	seen := map[string]bool{}
 	for cursor := current; cursor != ""; {
 		if seen[cursor] {
 			return false, fmt.Errorf("cycle at session %q", cursor)
 		}
 		seen[cursor] = true
-		meta, ok, err := LoadBranchMeta(filepath.Join(sessionDir, cursor+".jsonl"))
+		// Route through parentSessionPath so both the caller-provided id and
+		// every parent id read from disk metadata get the same bare-filename
+		// validation — a raw Join would let "../"-shaped ids escape the
+		// session directory.
+		metaPath, valid := s.parentSessionPath(cursor)
+		if !valid {
+			return false, fmt.Errorf("invalid session identifier %q", cursor)
+		}
+		meta, ok, err := LoadBranchMeta(metaPath)
 		if err != nil {
 			return false, err
 		}

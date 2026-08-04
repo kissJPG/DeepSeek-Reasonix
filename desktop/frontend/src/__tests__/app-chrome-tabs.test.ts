@@ -16,6 +16,8 @@ const transcriptSource = readFileSync(resolve(testDir, "../components/Transcript
 const composerSource = readFileSync(resolve(testDir, "../components/Composer.tsx"), "utf8");
 const controllerSource = readFileSync(resolve(testDir, "../lib/useController.ts"), "utf8");
 const bridgeSource = readFileSync(resolve(testDir, "../lib/bridge.ts"), "utf8");
+const workspacePanelSource = readFileSync(resolve(testDir, "../components/WorkspacePanel.tsx"), "utf8");
+const rewindCommitSource = readFileSync(resolve(testDir, "../lib/rewindCommit.ts"), "utf8");
 const layoutStoreSource = readFileSync(resolve(testDir, "../store/layout.ts"), "utf8");
 const stylesSource = readFileSync(resolve(testDir, "../styles.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
 
@@ -430,6 +432,18 @@ ok(
 );
 
 ok(
+  /if \(scope === "code"\) \{[\s\S]*?rewindForTabDetailed\(sourceTabId, turn, scope\)[\s\S]*?transactionId: outcome\.transactionId/.test(appSource),
+  "code-only rewind retains the committed transaction id for real undo",
+);
+
+ok(
+  /onSessionRevertCommitted\?\.\(workspaceTabId, result\)/.test(workspacePanelSource) &&
+    /onSessionRevertCommitted=\{handleSessionRevertCommitted\}/.test(appSource) &&
+    /handleSessionRevertCommitted[\s\S]*?transactionId: outcome\.transactionId/.test(appSource),
+  "single-file session revert publishes its transaction id to the app undo state",
+);
+
+ok(
   /const controllerReady =\s*state\.meta\?\.ready === true &&\s*\(!state\.meta\.runtime \|\| state\.meta\.runtime\.phase === "ready"\) &&\s*!state\.meta\.startupErr &&\s*!state\.backendActivationPending &&\s*!runtimeTransitioning;/.test(appSource) &&
     /if \(!activeTabId \|\| !controllerReady\) return;\s*void commitThenSend\(activeTabId, text\)\.catch/.test(appSource) &&
     /onPrompt=\{handleTranscriptPrompt\}/.test(appSource) &&
@@ -465,19 +479,46 @@ ok(
   /app\.NewSessionForTab\(tabId\)/.test(controllerSource) &&
     /app\.ClearSessionForTab\(tabId\)/.test(controllerSource) &&
     /app\.CompactForTab\(tabId\)/.test(controllerSource) &&
-    /app\.RewindForTab\(sourceTabId, turn, actionScope\)/.test(controllerSource) &&
+    /import\("\.\/rewindCommit"\)/.test(controllerSource) &&
+    /app\.PreviewRewindForTab\(sourceTabId, turn, scope\)/.test(rewindCommitSource) &&
+    /app\.CommitRewindForTab\(sourceTabId, remoteLegacy \? "" : \(plan\.planId \|\| ""\), turn, scope\)/.test(rewindCommitSource) &&
+    /app\.UndoRewindForTab\(sourceTabId, transactionId\)/.test(rewindCommitSource) &&
     /app\.ForkForTab\(sourceTabId, turn\)/.test(controllerSource) &&
     /app\.SummarizeFromForTab\(sourceTabId, turn\)/.test(controllerSource) &&
     /NewSessionForTab\(tabID: string\)/.test(bridgeSource) &&
     /CompactForTab\(tabID: string\)/.test(bridgeSource) &&
-    /RewindForTab\(tabID: string, turn: number, scope: string\)/.test(bridgeSource),
+    /PreviewRewindForTab\(tabID: string, turn: number, scope: string\)/.test(bridgeSource) &&
+    /CommitRewindForTab\(tabID: string, planID: string, turn: number, scope: string\)/.test(bridgeSource) &&
+    /UndoRewindForTab\(tabID: string, transactionID: string\)/.test(bridgeSource),
   "session-changing controller actions use explicit tab-scoped Wails bindings",
+);
+
+ok(
+  /plan\.coverage === "partial"/.test(rewindCommitSource) &&
+    /window\.confirm\(t\("rewind\.confirmPartialCoverage"/.test(rewindCommitSource) &&
+    /plan\?\.conflicts\?\.length \? "overwrite_checkpoint" : ""/.test(workspacePanelSource),
+  "rewind previews warn on incomplete coverage and only authorize file overwrite after a conflict confirmation",
 );
 
 ok(
   /const transcriptHydrating = state\.hydrating && !state\.hydrateHistoryLoaded;/.test(appSource) &&
     /hydrating=\{transcriptHydrating\}/.test(appSource),
   "Welcome is suppressed only until transcript history has loaded",
+);
+
+ok(
+  /const creationEmptyHero =/.test(appSource) &&
+    /!transcriptHydrating/.test(appSource) &&
+    /!hydratePlaceholderActive/.test(appSource) &&
+    /chat-pane\$\{creationEmptyHero \? " chat-pane--creation-empty" : ""\}/.test(appSource) &&
+    /heroMode=\{creationEmptyHero\}/.test(appSource),
+  "Creation empty hero waits for hydration to settle before enabling",
+);
+
+ok(
+  /if \(heroMode\) \{[\s\S]*?const maxHeight = 96;[\s\S]*?setTextareaAutoHeight/.test(composerSource) &&
+    !/if \(heroMode\) \{\s*setTextareaAutoHeight\(20\);/.test(composerSource),
+  "Creation hero composer auto-grows multi-line drafts instead of clipping at 20px",
 );
 
 ok(
@@ -598,8 +639,15 @@ ok(
 ok(
   finalDeclaration(".app--windows.app--creation .topicbar", "position") === "relative" &&
     finalDeclaration(".app--windows.app--creation .topicbar", "z-index") === "var(--z-app-chrome)" &&
-    finalDeclaration(".app--windows.app--creation .topicbar", "transform") === "translateY(-4px) !important",
-  "Windows Creation topic bar lifts its menus above conversation content without changing titlebar alignment",
+    finalDeclaration(".app--windows.app--creation .topicbar", "min-height") === "40px" &&
+    finalDeclaration(":root[data-theme-style] .app--windows.app--creation .topicbar", "min-height") === "40px" &&
+    finalDeclaration(".app--windows.app--creation .topicbar", "transform") === "none !important" &&
+    finalDeclaration(".app--windows.app--creation .topicbar__title-row", "transform") === "none" &&
+    finalDeclaration(".app--windows-frameless.app--creation", "--windows-window-controls-height") === "40px" &&
+    finalDeclaration(".app--creation .topicbar", "min-height") === "56px" &&
+    finalDeclaration(":root[data-theme-style] .app--creation .topicbar", "padding-top") === "14px" &&
+    finalDeclaration(".app--creation .topicbar__title-row", "transform") === "translateY(-3px)",
+  "Windows Creation stays 40px while macOS and Linux keep the shared Creation geometry",
 );
 
 for (const selector of [
