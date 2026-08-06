@@ -125,7 +125,11 @@ func (o *turnOrchestrator) runSubagentSkillTurns(ctx context.Context, skills []s
 	startMessages := c.messageCount()
 	defer c.snapshotActivityIfChanged(startMessages)
 	defer c.recordDisplayForNewUser(startMessages, display)
-	c.beginCheckpoint(input)
+	// The checkpoint prompt labels the turn in the rewind picker (and is
+	// prefilled into the composer after a conversation rewind), so it must be
+	// the user's own text — never the composed provider input with its
+	// transient <response-language>/<reasoning-language>/memory/hook blocks.
+	c.beginCheckpoint(firstNonEmpty(raw, task))
 	if c.guardianSess != nil {
 		c.guardianSess.ResetTurn()
 	}
@@ -213,6 +217,18 @@ func (o *turnOrchestrator) runOrchestratedTurn(ctx context.Context, turn orchest
 	} else {
 		input = c.compose(turn.input, turn.raw, !turn.synthetic)
 	}
+	// input.receive: the composed text crosses the extension chain before it
+	// enters the session (checkpoint, hooks, and the model all see the final
+	// text). A block ruling aborts the turn with the redacted reason surfaced,
+	// mirroring the PromptSubmit hook's abort path; a required-class extension
+	// failure fails the turn.
+	input, blocked, interceptErr := c.interceptInputReceive(ctx, input)
+	if interceptErr != nil {
+		return interceptErr
+	}
+	if blocked {
+		return nil
+	}
 	startMessages := c.messageCount()
 	defer c.snapshotActivityIfChanged(startMessages)
 	defer c.recordDisplayForNewUser(startMessages, turn.display)
@@ -223,9 +239,12 @@ func (o *turnOrchestrator) runOrchestratedTurn(ctx context.Context, turn orchest
 	// appended, so the recorded message boundary precedes it and pre-edit
 	// snapshots land here. Synthetic continuations stay attached to the visible
 	// turn that spawned them; otherwise hidden user-role messages would advance
-	// backend checkpoint turns without a matching frontend turn.
+	// backend checkpoint turns without a matching frontend turn. The label is
+	// the user's own text (raw, falling back to the expanded input) — the
+	// composed provider input carries transient prefab blocks that must never
+	// surface in the rewind picker or be prefilled into the composer.
 	if !turn.synthetic {
-		c.beginCheckpoint(input)
+		c.beginCheckpoint(firstNonEmpty(turn.raw, turn.input))
 	}
 	if c.guardianSess != nil {
 		c.guardianSess.ResetTurn()
